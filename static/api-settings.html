@@ -98,6 +98,13 @@
         .key-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px; align-items:center; }
         .key-row .field-frame { width:100%; }
         .verify-action-row { grid-column:1/-1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+        .advanced-endpoints { grid-column:1/-1; display:none; padding:12px; border:1px solid var(--line); border-radius:12px; background:var(--soft); }
+        .advanced-endpoints.open { display:block; }
+        .endpoint-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .endpoint-grid .field-frame { background:var(--panel); }
+        .endpoint-help { margin-bottom:10px; color:var(--muted); font-size:11px; line-height:1.55; font-weight:650; }
+        .endpoint-help code { padding:1px 6px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--text); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; }
+        body.studio-theme-dark .endpoint-grid .field-frame { background:var(--panel); }
         .key-btn { width:44px; height:44px; border-radius:11px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line); background:var(--panel); color:var(--muted); transition:all .15s ease; }
         .key-btn:hover { color:var(--text); border-color:var(--text); }
         body.studio-theme-dark .key-btn { background:var(--soft); border-color:var(--line-strong); }
@@ -239,11 +246,13 @@
         .ms-hint a { color:var(--text); font-weight:800; text-decoration:underline; text-underline-offset:3px; }
         /* MS 平台不需要协议选择 */
         body.show-ms #probeAsyncBtn,
+        body.show-ms #advancedToggleBtn,
+        body.show-ms .advanced-endpoints,
         body.show-ms .protocol-selector-wrap { display:none !important; }
         .ms-hint .ms-line { display:block; }
         .ms-hint .inline-code { display:inline-flex; align-items:center; min-height:20px; padding:0 7px; border-radius:6px; background:var(--panel); color:var(--text); border:1px solid var(--line); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; font-weight:700; vertical-align:middle; }
         .empty { padding:18px; border:1px dashed var(--line); border-radius:11px; color:var(--faint); text-align:center; font-size:11.5px; font-weight:700; }
-        @media (max-width:860px) { .page{padding:24px 16px 60px}.layout{grid-template-columns:1fr;gap:28px}.sidebar{position:static}.form,.model-grid{grid-template-columns:1fr}.models-toolbar{align-items:flex-start;flex-direction:column}.models-toolbar-actions{width:100%;justify-content:flex-end}.lora-row{grid-template-columns:1fr}.lora-row .icon-btn{width:100%;} }
+        @media (max-width:860px) { .page{padding:24px 16px 60px}.layout{grid-template-columns:1fr;gap:28px}.sidebar{position:static}.form,.model-grid,.endpoint-grid{grid-template-columns:1fr}.models-toolbar{align-items:flex-start;flex-direction:column}.models-toolbar-actions{width:100%;justify-content:flex-end}.lora-row{grid-template-columns:1fr}.lora-row .icon-btn{width:100%;} }
     </style>
 </head>
 <body>
@@ -325,6 +334,24 @@
                                         <option value="openai" data-i18n="api.protocolOpenAI">OpenAI 兼容</option>
                                         <option value="apimart" data-i18n="api.protocolApimart">APIMart 异步</option>
                                     </select>
+                                </div>
+                                <button id="advancedToggleBtn" class="action-btn" type="button" onclick="toggleAdvancedEndpoints()">
+                                    <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i><span>高级设置</span>
+                                </button>
+                            </div>
+                            <div id="advancedEndpoints" class="advanced-endpoints">
+                                <div class="endpoint-help">
+                                    留空即使用默认端口。请填写 <code>/v1/...</code> 格式，例如 <code>/v1/images/edits</code>。
+                                </div>
+                                <div class="endpoint-grid">
+                                    <label class="field">
+                                        <span class="label">文生图端口</span>
+                                        <div class="field-frame"><input id="imageGenerationEndpointInput" type="text" placeholder="/v1/images/generations"></div>
+                                    </label>
+                                    <label class="field">
+                                        <span class="label">图生图/编辑端口</span>
+                                        <div class="field-frame"><input id="imageEditEndpointInput" type="text" placeholder="/v1/images/edits"></div>
+                                    </label>
                                 </div>
                             </div>
                             <div id="verifyResult" style="display:none;padding:2px 0;grid-column:1/-1"></div>
@@ -447,6 +474,9 @@
         const idInput = document.getElementById('idInput');
         const baseInput = document.getElementById('baseInput');
         const protocolInput = document.getElementById('protocolInput');
+        const advancedEndpoints = document.getElementById('advancedEndpoints');
+        const imageGenerationEndpointInput = document.getElementById('imageGenerationEndpointInput');
+        const imageEditEndpointInput = document.getElementById('imageEditEndpointInput');
         const keyInput = document.getElementById('keyInput');
         const keyHint = document.getElementById('keyHint');
         const imageModelList = document.getElementById('imageModelList');
@@ -467,18 +497,15 @@
         function normalizeId(value){
             return String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '').replace(/-+/g, '-').slice(0, 40);
         }
-        // 从平台名生成稳定的 ID；含中文等非 ASCII 会被去掉，剩下为空时自动追加随机后缀
+        // 平台 Key 按 ID 写入 API/.env；ID 一旦创建就保持稳定，避免改名或中文名称导致 Key 看起来丢失。
         function deriveIdFromName(name, existingId){
-            // 内置 / 已保存过的 ID 不变
-            if(existingId === 'comfly' || existingId === 'modelscope') return existingId;
+            if(existingId) return existingId;
             let id = normalizeId(name);
             if(!id){
-                // 全是 Unicode 字符，给个随机短串
                 id = 'api-' + Math.random().toString(36).slice(2, 8);
             }
-            // 避免和其他 provider 冲突（除自己外）
             let candidate = id, i = 2;
-            while(providers.some(p => p.id === candidate && p.id !== existingId)){
+            while(providers.some(p => p.id === candidate)){
                 candidate = `${id}-${i++}`;
             }
             return candidate;
@@ -502,12 +529,34 @@
             const seen = new Set();
             return values.map(v => String(v || '').trim()).filter(v => v && !seen.has(v) && seen.add(v));
         }
+        function endpointValue(input){
+            return String(input?.value || '').trim();
+        }
+        function toggleAdvancedEndpoints(force){
+            if(!advancedEndpoints) return;
+            const open = typeof force === 'boolean' ? force : !advancedEndpoints.classList.contains('open');
+            advancedEndpoints.classList.toggle('open', open);
+            refreshIcons();
+        }
+        function normalizeEndpointSetting(value){
+            const endpoint = String(value || '').trim();
+            if(!endpoint) return '';
+            if(/^https?:\/\//i.test(endpoint)) return endpoint.replace(/\/+$/, '');
+            return endpoint;
+        }
+        function validateEndpointSetting(endpoint, label){
+            if(!endpoint) return true;
+            if(/\s/.test(endpoint)) throw new Error(`${label} 不能包含空格`);
+            if(/^https?:\/\//i.test(endpoint)) return true;
+            if(!endpoint.startsWith('/')) throw new Error(`${label} 请填写 /v1/... 格式，例如 /v1/images/edits`);
+            return true;
+        }
         function syncEditor(){
             const item = provider();
             if(!item) return;
             const oldId = item.id;
             const isBuiltin = item.id === 'comfly' || item.id === 'modelscope';
-            // 内置平台不允许改 ID；自定义平台的 ID 自动从名称派生
+            // 内置和自定义平台的 ID 都保持稳定；新建时若没有 ID 才生成一次。
             const nextId = isBuiltin ? item.id : deriveIdFromName(nameInput.value, item.id);
             item.id = nextId;
             if(oldId !== item.id) selectedId = item.id;
@@ -515,6 +564,8 @@
             item.base_url = baseInput.value.trim();
             // MS 固定使用 OpenAI 协议，不从下拉读取
             item.protocol = (item.id === 'modelscope') ? 'openai' : (protocolInput?.value || 'openai');
+            item.image_generation_endpoint = normalizeEndpointSetting(endpointValue(imageGenerationEndpointInput));
+            item.image_edit_endpoint = normalizeEndpointSetting(endpointValue(imageEditEndpointInput));
             const key = keyInput.value.trim();
             if(key) item.api_key = key;
         }
@@ -562,6 +613,9 @@
             clearVerifyResult();
             baseInput.value = item.base_url || '';
             if(protocolInput) protocolInput.value = item.protocol || 'openai';
+            if(imageGenerationEndpointInput) imageGenerationEndpointInput.value = item.image_generation_endpoint || '';
+            if(imageEditEndpointInput) imageEditEndpointInput.value = item.image_edit_endpoint || '';
+            toggleAdvancedEndpoints(false);
             keyInput.value = '';
             keyInput.placeholder = item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.enterKey');
             keyHint.textContent = item.has_key ? `${tr('api.keySaved')}${item.key_env || 'API/.env'}` : tr('api.noKey');
@@ -810,8 +864,8 @@
             const key = keyInput.value.trim();
             if(!key){ alert(tr('api.enterKeyAlert') || '请输入 Key'); return; }
             item.api_key = key;
-            await saveProviders();
-            keyInput.value = '';
+            const ok = await saveProviders();
+            if(ok) keyInput.value = '';
         }
         async function clearKeyOnly(){
             const item = provider();
@@ -819,8 +873,8 @@
             if(!item.has_key && !keyInput.value){ return; }
             if(!confirm(tr('api.confirmClearKey') || '确认清除当前 Key？')) return;
             item._clearKey = true;
-            await saveProviders();
-            keyInput.value = '';
+            const ok = await saveProviders();
+            if(ok) keyInput.value = '';
         }
         function renderModels(kind){
             const item = provider();
@@ -920,7 +974,7 @@
             let id = 'custom-api';
             let index = 2;
             while(providers.some(item => item.id === id)) id = `custom-api-${index++}`;
-            providers.push({id, name:tr('api.newProvider'), base_url:'https://', protocol:'openai', enabled:true, primary:false, image_models:[], chat_models:[], video_models:[], has_key:false, key_preview:''});
+            providers.push({id, name:tr('api.newProvider'), base_url:'https://', protocol:'openai', image_generation_endpoint:'', image_edit_endpoint:'', enabled:true, primary:false, image_models:[], chat_models:[], video_models:[], has_key:false, key_preview:''});
             selectedId = id;
             renderEditor();
         }
@@ -968,24 +1022,34 @@
         }
         async function saveProviders(){
             syncEditor();
-            providers.forEach(item => {
-                item.id = normalizeId(item.id);
-                item.protocol = ['openai', 'apimart'].includes(String(item.protocol || '').toLowerCase()) ? String(item.protocol).toLowerCase() : 'openai';
-                item.image_models = unique(item.image_models || []);
-                item.chat_models = unique(item.chat_models || []);
-                item.video_models = unique(item.video_models || []);
-                item.ms_loras = (Array.isArray(item.ms_loras) ? item.ms_loras : []).map(lora => ({
-                    id:String(lora.id || '').trim(),
-                    name:String(lora.name || lora.id || '').trim(),
-                    target_model:String(lora.target_model || '').trim(),
-                    strength:normalizeLoraStrength(lora.strength ?? 0.8),
-                    enabled:lora.enabled !== false,
-                    note:String(lora.note || '').trim()
-                })).filter(lora => lora.id && lora.target_model);
-            });
+            try {
+                providers.forEach(item => {
+                    item.id = normalizeId(item.id);
+                    item.protocol = ['openai', 'apimart'].includes(String(item.protocol || '').toLowerCase()) ? String(item.protocol).toLowerCase() : 'openai';
+                    item.image_generation_endpoint = normalizeEndpointSetting(item.image_generation_endpoint);
+                    item.image_edit_endpoint = normalizeEndpointSetting(item.image_edit_endpoint);
+                    validateEndpointSetting(item.image_generation_endpoint, '文生图端口');
+                    validateEndpointSetting(item.image_edit_endpoint, '图生图/编辑端口');
+                    item.image_models = unique(item.image_models || []);
+                    item.chat_models = unique(item.chat_models || []);
+                    item.video_models = unique(item.video_models || []);
+                    item.ms_loras = (Array.isArray(item.ms_loras) ? item.ms_loras : []).map(lora => ({
+                        id:String(lora.id || '').trim(),
+                        name:String(lora.name || lora.id || '').trim(),
+                        target_model:String(lora.target_model || '').trim(),
+                        strength:normalizeLoraStrength(lora.strength ?? 0.8),
+                        enabled:lora.enabled !== false,
+                        note:String(lora.note || '').trim()
+                    })).filter(lora => lora.id && lora.target_model);
+                });
+            } catch(err) {
+                setStatus(err.message || '高级端口设置不合法');
+                toggleAdvancedEndpoints(true);
+                return false;
+            }
             if(new Set(providers.map(item => item.id)).size !== providers.length){
                 alert(tr('api.duplicateId'));
-                return;
+                return false;
             }
             setStatus(tr('api.saving'));
             try {
@@ -997,6 +1061,8 @@
                         name:item.name,
                         base_url:item.base_url,
                         protocol:(item.id === 'modelscope') ? 'openai' : (item.protocol || 'openai'),
+                        image_generation_endpoint:item.image_generation_endpoint || '',
+                        image_edit_endpoint:item.image_edit_endpoint || '',
                         enabled:item.enabled !== false,
                         primary:false,
                         image_models:item.image_models || [],
@@ -1004,7 +1070,8 @@
                         video_models:item.video_models || [],
                         ms_loras:item.id === 'modelscope' ? (item.ms_loras || []) : [],
                         ms_defaults_version:item.id === 'modelscope' ? (item.ms_defaults_version || 1) : 0,
-                        api_key:item._clearKey ? '' : (item.api_key || undefined)
+                        api_key:item.api_key || undefined,
+                        clear_key:item._clearKey === true
                     })))
                 });
                 if(!res.ok) throw new Error((await res.json()).detail || tr('api.saveFailed'));
@@ -1015,8 +1082,10 @@
                 setStatus(tr('api.saved'));
                 // 广播变更，画布等其他 iframe 立即重新拉取最新平台/模型列表
                 try { new BroadcastChannel('studio-api').postMessage({ type:'providers-changed' }); } catch(e) {}
+                return true;
             } catch(err) {
                 setStatus(err.message || tr('api.saveFailed'));
+                return false;
             }
         }
         function escapeHtml(str){
