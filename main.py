@@ -684,22 +684,62 @@ os.makedirs(WORKFLOW_DIR, exist_ok=True)
 os.makedirs(CONVERSATION_DIR, exist_ok=True)
 os.makedirs(CANVAS_DIR, exist_ok=True)
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
 # --- Pydantic 模型 ---
 
-@app.get("/api/app-info")
-def app_info():
-    version = APP_VERSION
+def current_app_version():
     version_file = os.path.join(BASE_DIR, "VERSION")
     try:
         if os.path.exists(version_file):
             with open(version_file, "r", encoding="utf-8") as f:
-                version = (f.read().strip().splitlines() or [APP_VERSION])[0].strip() or APP_VERSION
+                version = (f.read().strip().splitlines() or [""])[0].strip()
+                if version:
+                    return version
     except Exception:
-        version = APP_VERSION
+        pass
+    try:
+        return time.strftime("%Y.%m.%d", time.localtime())
+    except Exception:
+        return ""
+
+def versioned_static_html(html: str) -> str:
+    version = current_app_version()
+    if not version:
+        return html
+    safe_version = urllib.parse.quote(version, safe="._-")
+    pattern = re.compile(r'(?P<prefix>(?:src|href)=["\']|@import\s+url\(["\'])(?P<url>/static/[^"\')?#]+(?:\.(?:js|css|html)))(?:\?v=[^"\')#]*)?', re.I)
+    return pattern.sub(lambda m: f"{m.group('prefix')}{m.group('url')}?v={safe_version}", html)
+
+def static_html_response(filename: str):
+    path = os.path.join(STATIC_DIR, filename)
+    with open(path, "r", encoding="utf-8") as f:
+        html = f.read()
+    return Response(versioned_static_html(html), media_type="text/html; charset=utf-8")
+
+@app.get("/static/{path:path}")
+def static_file(path: str):
+    safe_path = str(path or "").replace("\\", "/").lstrip("/")
+    if not safe_path or any(part in {"", ".", ".."} for part in safe_path.split("/")):
+        raise HTTPException(status_code=404, detail="Not found")
+    local_path = os.path.abspath(os.path.join(STATIC_DIR, safe_path))
+    static_root = os.path.abspath(STATIC_DIR)
+    try:
+        if os.path.commonpath([static_root, local_path]) != static_root:
+            raise HTTPException(status_code=404, detail="Not found")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not os.path.exists(local_path) or not os.path.isfile(local_path):
+        raise HTTPException(status_code=404, detail="Not found")
+    if local_path.lower().endswith(".html"):
+        with open(local_path, "r", encoding="utf-8") as f:
+            return Response(versioned_static_html(f.read()), media_type="text/html; charset=utf-8")
+    return FileResponse(local_path, media_type=content_type_for_path(local_path))
+
+@app.get("/api/app-info")
+def app_info():
+    version = current_app_version()
     return {
         "version": version,
         "repo_url": GITHUB_REPO_URL,
@@ -2514,7 +2554,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 if is_gpt2:
                     raise HTTPException(
                         status_code=502,
-                        detail=f"GPT-Image-2 编辑接口 /images/edits 调用失败：{edit_failed_text[:300] or edit_failed_status}"
+                        detail=f"GPT-Image-2 编辑接口 /images/edits 调用失败：{edit_failed_text[:300] or edit_failed_status}。已停止自动重试，避免上游可能已扣费后再次请求。"
                     )
                 print(f"/images/edits failed ({edit_failed_status}): {edit_failed_text[:200]} → 回退到 /images/generations + image:[] JSON")
                 image_payload = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:4]]
@@ -2571,7 +2611,7 @@ def upstream_message_from_record(item):
 
 @app.get("/")
 async def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return static_html_response("index.html")
 
 @app.get("/api/view")
 def view_image(filename: str, type: str = "input", subfolder: str = ""):
