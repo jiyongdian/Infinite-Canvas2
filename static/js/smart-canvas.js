@@ -3364,7 +3364,6 @@ function smartLoopBodyHtml(node){
         ${node.imageInput ? `<div class="loop-smart-panel">
             ${loopThumbs}
             <div class="loop-smart-mini">
-                ${loopNumberControlHtml({label:tr('canvas.loopImageStart'), value:node.loopStart, key:'loopStart', max:9999, quick:[1,2,3,4,5,6,8,10]})}
                 ${loopNumberControlHtml({label:tr('canvas.loopBatchSize'), value:node.imageBatchSize, key:'imageBatchSize', max:100, quick:[1,2,3,4,5,6,8,10]})}
             </div>
             <div class="loop-smart-note">${imageCount ? escapeHtml(trf('canvas.loopImageWillOutput', {n:imageCount})) : escapeHtml(tr('canvas.loopImageEmpty'))}</div>
@@ -3378,16 +3377,17 @@ function smartLoopBodyHtml(node){
                 ${visiblePromptFields.map((value, index) => `<div class="loop-smart-prompt-item">
                     <div class="loop-smart-prompt-index">${index + 1}</div>
                     <div class="loop-smart-control loop-smart-text" contenteditable="true" data-loop-prompt-index="${index}" data-placeholder="${escapeHtml(tr('canvas.loopVariablePlaceholder'))}">${smartLoopVariableHtml(value || (index === 0 && !promptFields.length ? defaultPrompt : ''))}</div>
-                    <button class="loop-smart-control loop-smart-icon-btn" type="button" data-loop-prompt-delete="${index}" ${visiblePromptFields.length <= 1 ? 'disabled' : ''} title="${escapeHtml(tr('common.delete'))}"><i data-lucide="trash-2"></i></button>
+                    <button class="loop-smart-control loop-smart-icon-btn" type="button" data-loop-prompt-delete="${index}" ${visiblePromptFields.length <= 1 ? 'disabled' : ''} title="${escapeHtml(tr('common.delete'))}" aria-label="${escapeHtml(tr('common.delete'))}">×</button>
                 </div>`).join('')}
             </div>
             <div class="loop-smart-row loop-smart-prompt-actions">
                 <button class="loop-smart-control loop-smart-token loop-smart-counter-token" type="button" data-loop-token="《计数》">${escapeHtml(tr('canvas.counterToken'))}</button>
                 <span class="loop-smart-note">${escapeHtml(promptHint)}</span>
-                <button class="loop-smart-control loop-smart-token loop-smart-add-prompt" type="button" data-loop-prompt-add="1"><i data-lucide="plus"></i><span>新增</span></button>
+                <button class="loop-smart-control loop-smart-add-prompt" type="button" data-loop-prompt-add="1" title="新增" aria-label="新增"><i data-lucide="plus"></i></button>
             </div>
         </div>` : ''}
         <div class="loop-smart-footer">
+            ${loopNumberControlHtml({label:tr('canvas.loopImageStart'), value:node.loopStart, key:'loopStart', max:9999, quick:[1,2,3,4,5,6,8,10]})}
             ${loopNumberControlHtml({label:tr('canvas.loopCount'), value:node.count, key:'count', max:100, quick:[1,2,3,4,5,6,8,10]})}
             <button class="loop-smart-control loop-smart-run" type="button" data-loop-run="${escapeHtml(node.id)}" ${smartCascadeRunning && smartCascadeActiveLoopId === node.id ? 'disabled' : ''}><i data-lucide="workflow"></i><span>${escapeHtml(smartCascadeRunning && smartCascadeActiveLoopId === node.id ? tr('common.running') : tr('smart.loopRunAll'))}</span></button>
         </div>
@@ -5449,7 +5449,8 @@ function renderInputThumbsRow(node){
             ? tr('smart.inputSelf')
             : (smartImageMode(node) === 'workflow' ? tr('smart.inputUpstreamWorkflow') : tr('smart.inputUpstream'));
         const inner = isVid ? `<video src="${escapeHtml(img.url)}" muted preload="metadata" playsinline disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback"></video>` : `<img src="${escapeHtml(img.url)}" draggable="false">`;
-        return `<div class="input-thumb ${isSelf ? 'input-self' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}</div>`;
+        const label = `图${i + 1}`;
+        return `<div class="input-thumb ${isSelf ? 'input-self' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span></div>`;
     }).join('');
     inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div>${showCloudUpload ? `<div class="input-thumb-actions">${renderManualVideoUrlControl()}${renderTempShUploadControl()}</div>` : ''}`;
     bindInputThumbsDrag(node, dedup);
@@ -6639,6 +6640,32 @@ function createPendingOutputFromSource(sourceNode, expectedCount, meta, options=
     selectedImage = {nodeId:'', index:-1};
     return output;
 }
+function createParallelLoopOutputNode(templateNode, sourceNode, roundIndex, roundOffset=0){
+    const rect = nodeRect(templateNode);
+    const output = cloneSmartNode(templateNode, 0, 0);
+    output.id = uid('smart');
+    output.type = 'smart-image';
+    output.x = (Number(templateNode.x) || 0) + (Number(rect.width) || 260) + 80;
+    output.y = (Number(templateNode.y) || 0) + roundOffset * ((Number(rect.height) || 180) + 28);
+    output.title = `Image ${roundIndex}`;
+    output.images = [];
+    output.pending = 0;
+    output.running = false;
+    output.created_at = Date.now();
+    delete output.w;
+    delete output.h;
+    delete output.historyFor;
+    delete output.isHistoryGroup;
+    delete output.sourceNodeId;
+    delete output.runAt;
+    delete output.runPrompt;
+    delete output.runModelPrompt;
+    delete output.runPromptRefs;
+    delete output.runInputRefs;
+    nodes.push(output);
+    connectInputNode(sourceNode.id, output.id);
+    return output;
+}
 function extractCurrentImagesToSource(node, meta=null){
     const imgs = (node.images || []).slice();
     if(!imgs.length) return null;
@@ -7011,7 +7038,7 @@ function ensureHistoryGroupForNode(node){
     positionHistoryGroupForNode(node, group);
     return group;
 }
-function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=null){
+function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=null, options={}){
     if(!node || !additions?.length) return [];
     const beforeRight = (Number(node.x) || 0) + nodeRect(node).width;
     const existing = cleanHistoryImages(node.images || []);
@@ -7042,11 +7069,12 @@ function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=nul
     delete node.h;
     if(meta) attachRunMeta(node, meta);
     const afterRight = (Number(node.x) || 0) + nodeRect(node).width;
-    pushRightSideNodes(node, afterRight - beforeRight + 36);
+    const skipShift = options.skipShift || Boolean(smartLoopContext?.nodeId);
+    if(!skipShift) pushRightSideNodes(node, afterRight - beforeRight + 36);
     selectedImage = {nodeId:'', index:-1};
     return next;
 }
-function appendOutputsToNode(node, additions, kind='image'){
+function appendOutputsToNode(node, additions, kind='image', options={}){
     if(!node || !additions?.length) return [];
     const beforeRight = (Number(node.x) || 0) + nodeRect(node).width;
     const existing = (node.images || []).filter(img => img?.url).map(img => stripImageGenerationMeta(img));
@@ -7063,7 +7091,8 @@ function appendOutputsToNode(node, additions, kind='image'){
     delete node.w;
     delete node.h;
     const afterRight = (Number(node.x) || 0) + nodeRect(node).width;
-    pushRightSideNodes(node, afterRight - beforeRight + 36);
+    const skipShift = options.skipShift || Boolean(smartLoopContext?.nodeId);
+    if(!skipShift) pushRightSideNodes(node, afterRight - beforeRight + 36);
     return next;
 }
 function syncCascadeRunButton(node=selectedNode()){
@@ -7253,7 +7282,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
             const url = typeof item === 'string' ? item : item?.url || '';
             return stripImageGenerationMeta({url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:(typeof item === 'object' && item.kind) || result.kind, generatedResult:true});
         }).filter(item => item.url);
-        replaceOutputsToNodeWithHistory(outputNode, additions, result.kind, null);
+        replaceOutputsToNodeWithHistory(outputNode, additions, result.kind, null, {skipShift:Boolean(ctx?.nodeId)});
         outputNode.runPrompt = targetPromptState.runPrompt;
         outputNode.runModelPrompt = targetPromptState.runModelPrompt;
         outputNode.runPromptRefs = targetPromptState.runPromptRefs || [];
@@ -7289,7 +7318,7 @@ function appendCascadeRefsToReceiver(node, refs){
             kind:ref.kind || (isVideoMediaItem(ref) ? 'video' : 'image')
         }));
     if(!additions.length) return [];
-    replaceOutputsToNodeWithHistory(node, additions, mediaKindForUrls(additions, additions.some(isVideoMediaItem) ? 'video' : 'image'));
+    replaceOutputsToNodeWithHistory(node, additions, mediaKindForUrls(additions, additions.some(isVideoMediaItem) ? 'video' : 'image'), null, {skipShift:Boolean(smartLoopContext?.nodeId)});
     render();
     return additions;
 }
@@ -7302,6 +7331,22 @@ function cascadeRefsFromOutputs(outputs, targetNode){
         nodeId:targetNode?.id || '',
         imageIndex:targetNode ? (targetNode.images || []).length - outputs.length + index : index
     }));
+}
+function smartCascadeParallelLimit(chain=[]){
+    const hasComfy = (chain || []).some(node => smartSettingsForNode(node)?.engine === 'comfy');
+    return hasComfy ? 1 : 6;
+}
+async function runSmartCascadeRoundsWithLimit(roundIndexes, limit, runner){
+    let next = 0;
+    const workerCount = Math.max(1, Math.min(Number(limit) || 1, roundIndexes.length));
+    const workers = Array.from({length:workerCount}, async () => {
+        while(next < roundIndexes.length){
+            const roundOffset = next++;
+            const current = roundIndexes[roundOffset];
+            await runner(current, roundOffset);
+        }
+    });
+    await Promise.all(workers);
 }
 async function runSmartCascade(targetNode=null){
     const tail = targetNode || selectedNode();
@@ -7326,6 +7371,7 @@ async function runSmartCascade(targetNode=null){
     const startIndex = Math.max(1, Number(loop?.node?.loopStart) || 1);
     const batchSize = loop?.node?.imageInput ? Math.max(1, Math.min(100, Number(loop.node.imageBatchSize) || 1)) : 1;
     const endIndex = startIndex + (totalRounds - 1) * batchSize;
+    const loopMode = loop?.mode === 'parallel' ? 'parallel' : 'serial';
     if(!singleNodeLoopRun){
         const runStates = {};
         if(loop?.node?.id && graph.root?.id) runStates[`${loop.node.id}->${graph.root.id}`] = 'wait';
@@ -7335,15 +7381,12 @@ async function runSmartCascade(targetNode=null){
         updateComposer();
     }
     try {
-        const runRound = async (loopIndex=startIndex) => {
+        const runRound = async (loopIndex=startIndex, options={}) => {
             const ctx = loop ? {index:loopIndex, total:endIndex, nodeId:loop.node.id, forceWorkflow:chain.length > 1} : null;
             smartLoopContext = ctx;
             if(singleNodeLoopRun){
-                selectedId = tail.id;
-                selectedIds = [];
-                selectedImage = {nodeId:'', index:-1};
-                loadNodePromptDraftToInput(tail);
-                await runGeneration();
+                const outputTarget = options.outputTarget || tail;
+                await runCascadeStepIntoNode(loop.node, outputTarget, [], ctx);
                 return;
             }
             const producedRefs = new Map();
@@ -7422,7 +7465,20 @@ async function runSmartCascade(targetNode=null){
             producedRefs.set(graph.root.id, rootRefs);
             await runBranch(graph.root, rootRefs);
         };
-        for(let round = 0; round < totalRounds; round++) await runRound(startIndex + round * batchSize);
+        const roundIndexes = Array.from({length:totalRounds}, (_, round) => startIndex + round * batchSize);
+        if(loopMode === 'parallel' && totalRounds > 1){
+            const limit = smartCascadeParallelLimit(chain);
+            const parallelTargets = singleNodeLoopRun
+                ? roundIndexes.map((loopIndex, roundOffset) => createParallelLoopOutputNode(tail, loop.node, loopIndex, roundOffset))
+                : [];
+            if(parallelTargets.length) render();
+            await runSmartCascadeRoundsWithLimit(roundIndexes, limit, (loopIndex, roundOffset) => {
+                const outputTarget = parallelTargets[roundOffset] || null;
+                return runRound(loopIndex, {outputTarget});
+            });
+        } else {
+            for(const loopIndex of roundIndexes) await runRound(loopIndex);
+        }
         smartLoopContext = null;
         selectedId = '';
         selectedIds = [];
@@ -7433,7 +7489,9 @@ async function runSmartCascade(targetNode=null){
         settings = originalSettings;
         promptInput.innerHTML = originalPromptHtml;
         scheduleSave();
-        toast(totalRounds > 1 ? trf('smart.loopRunRoundsDone', {n:totalRounds}) : tr('smart.loopRunDone'));
+        toast(totalRounds > 1
+            ? trf(loopMode === 'parallel' ? 'smart.loopParallelRoundsDone' : 'smart.loopRunRoundsDone', {n:totalRounds})
+            : tr('smart.loopRunDone'));
     } catch(e) {
         smartLoopContext = null;
         selectedId = originalSelected;
