@@ -210,7 +210,7 @@ function renderCanvasIcon(icon, size = 14) {
 }
 
 const SIZE_MAP = {
-    square: { '1k':'1024x1024', '2k':'2048x2048', '4k':'2880x2880' },
+    square: { '1k':'1024x1024', '2k':'2048x2048', '4k':'2048x2048' },
     portrait: { '1k':'1024x1536', '2k':'1360x2048', '4k':'2352x3520' },
     portrait43: { '1k':'1008x1344', '2k':'1536x2048', '4k':'2448x3264' },
     landscape43: { '1k':'1344x1008', '2k':'2048x1536', '4k':'3264x2448' },
@@ -2705,6 +2705,9 @@ function imageRefsOnly(refs){
 function videoRefsOnly(refs){
     return (refs || []).filter(ref => ref?.url && mediaKindForRef(ref) === 'video');
 }
+function isRemoteVideoReferenceUrl(url){
+    return /^https?:\/\//i.test(String(url || '')) || /^asset:\/\//i.test(String(url || ''));
+}
 function tempShUploadedUrlForNode(node, url){
     const match = (node?.tempShLinks || []).find(item => item?.source === url && item?.url);
     return match?.url || url;
@@ -2805,10 +2808,10 @@ async function setCanvasManualVideoUrl(nodeId){
     const node = nodes.find(n => n.id === nodeId);
     if(!node) return '';
     const refs = videoRefsOnly(orderedSources(node, generatorSources(node)).flatMap(src => src.refs || []));
-    const firstLocal = refs.find(ref => ref?.url && !/^https?:\/\//i.test(ref.url));
+    const firstLocal = refs.find(ref => ref?.url && !isRemoteVideoReferenceUrl(ref.url));
     const firstAny = firstLocal || refs[0] || null;
     const current = manualVideoUrlForNode(node) || (firstAny ? tempShUploadedUrlForNode(node, firstAny.url) : '');
-    const value = prompt('输入视频网址', /^https?:\/\//i.test(current) ? current : '');
+    const value = prompt('输入视频网址 / 火山素材 URI', isRemoteVideoReferenceUrl(current) ? current : '');
     const url = String(value || '').trim();
     if(!url){
         clearManualVideoUrlForNode(node);
@@ -2817,8 +2820,8 @@ async function setCanvasManualVideoUrl(nodeId){
         showErrorModal('已清除视频网址。', '输入网址');
         return '';
     }
-    if(!/^https?:\/\//i.test(url)){
-        showErrorModal('请输入 http/https 视频网址', '输入网址');
+    if(!isRemoteVideoReferenceUrl(url)){
+        showErrorModal('请输入 http/https 视频网址或 asset:// 火山素材 URI', '输入网址');
         return '';
     }
     applyManualVideoUrlToCanvasRef(node, firstAny, url);
@@ -5100,7 +5103,12 @@ function renderLLMBody(node){
     if(!providerChatModels(llmProv).includes(node.model)) node.model = providerChatModels(llmProv)[0] || node.model;
     const modelOpts = chatModelOptions(node.model, llmProv);
     const imgs = llmInputImages(node);
-    const imgBadge = imgs.length ? `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:rgba(16,185,129,.12);color:#047857;font-size:10.5px;font-weight:700;width:fit-content;line-height:1.4"><i data-lucide="image" class="w-3 h-3"></i>已连接 ${imgs.length} 张图片 · 需选 VL 视觉模型（如 Qwen2.5-VL）</div>` : '';
+    const videos = llmInputVideos(node);
+    const mediaBadgeText = [
+        imgs.length ? `${imgs.length} 张图片` : '',
+        videos.length ? `${videos.length} 个视频` : ''
+    ].filter(Boolean).join(' · ');
+    const imgBadge = mediaBadgeText ? `<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:rgba(16,185,129,.12);color:#047857;font-size:10.5px;font-weight:700;width:fit-content;line-height:1.4"><i data-lucide="${videos.length && !imgs.length ? 'video' : 'image'}" class="w-3 h-3"></i>已连接 ${mediaBadgeText} · 需选支持视觉/视频的模型</div>` : '';
     node.showSystem = Boolean(node.showSystem);
     wrap.innerHTML = `
         <div class="llm-row">
@@ -5353,6 +5361,20 @@ function llmInputImages(node){
         }
         if(n.type === 'group'){
             (n.items || []).map(id => nodes.find(x => x.id === id)).filter(x => x?.type === 'image' && x?.url && mediaKindForNode(x) === 'image').forEach(img => urls.push(img.url));
+        }
+    });
+    return urls;
+}
+function llmInputVideos(node){
+    const urls = [];
+    connections.filter(c => c.to === node.id).map(c => nodes.find(n => n.id === c.from)).filter(Boolean).forEach(n => {
+        if(n.type === 'image' && n.url && mediaKindForNode(n) === 'video') urls.push(n.url);
+        if(n.type === 'output' && (n.images||[]).length){
+            const last = [...n.images].reverse().map(outputUrlValue).find(url => url && isVideoUrl(url));
+            if(last) urls.push(last);
+        }
+        if(n.type === 'group'){
+            (n.items || []).map(id => nodes.find(x => x.id === id)).filter(x => x?.type === 'image' && x?.url && mediaKindForNode(x) === 'video').forEach(video => urls.push(video.url));
         }
     });
     return urls;
@@ -8320,6 +8342,7 @@ async function callCanvasLLM(node, message, messages=[], options={}){
     const llmProv = resolveChatProviderId(node.llmProvider || 'comfly');
     const model = resolveChatModel(node.model || node.llmMsModel, llmProv);
     const images = llmInputImages(node);
+    const videos = llmInputVideos(node);
     const result = await cascadeFetch('/api/canvas-llm', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -8331,6 +8354,7 @@ async function callCanvasLLM(node, message, messages=[], options={}){
             system_prompt:node.systemPrompt || 'You are a helpful assistant.',
             messages,
             images,
+            videos,
         })
     }, options).then(async r => {
         if(!r.ok){

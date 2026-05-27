@@ -233,7 +233,7 @@ const MS_GEN_MODELS = {
     custom: { label:tr('smart.custom') || '自定义', modelId:'', acceptsImage:true, endpoint:'/api/ms/generate' }
 };
 const SIZE_MAP = {
-    square: {'1k':'1024x1024','2k':'2048x2048','4k':'2880x2880'},
+    square: {'1k':'1024x1024','2k':'2048x2048','4k':'2048x2048'},
     landscape: {'1k':'1536x1024','2k':'2048x1360','4k':'3520x2336'},
     portrait: {'1k':'1024x1536','2k':'1360x2048','4k':'2336x3520'},
     landscape43: {'1k':'1024x768','2k':'2048x1536','4k':'3312x2480'},
@@ -525,6 +525,7 @@ function nodeScale(node){
 const MEDIA_NODE_DEFAULT_SCALE = 2;
 const MEDIA_GROUP_PREVIOUS_DEFAULT_SCALE = 1.6;
 const MEDIA_GROUP_DEFAULT_SCALE = 0.8;
+const MEDIA_GROUP_THUMB_BASE = 224;
 const EMPTY_UPLOAD_NODE_WIDTH = 316;
 const EMPTY_UPLOAD_NODE_HEIGHT = 194;
 function mediaNodeDefaultScale(node){
@@ -603,7 +604,11 @@ function smartNodeInputThumbsHeight(images){
 }
 function promptNodeInputImages(node){
     if(!node?.llmEnabled) return [];
-    return inputImagesFor(node).filter(img => img?.url);
+    return promptNodeInputMediaForLLM(node).filter(img => img?.url);
+}
+function promptNodeInputMediaForLLM(node){
+    const refs = smartImageUsesWorkflowInput(node) ? workflowInputImagesFor(node) : inputImagesFor(node);
+    return (refs || []).filter(ref => ref?.url);
 }
 function smartNodeInputThumbsHtml(images, opts={}){
     const refs = (images || []).filter(img => img?.url);
@@ -658,7 +663,7 @@ function imageLayout(images, scale=1, node=null){
         };
     }
     if(count === 1) return singleImageLayout(images[0], node, s);
-    const thumb = Math.round(192 * s);
+    const thumb = Math.round(MEDIA_GROUP_THUMB_BASE * s);
     const cell = thumb + 8;
     const PAD = 32; // group-node has 16px padding on each side
     const grid = images.find(img => img?.grid?.type === 'grid-split')?.grid;
@@ -1807,14 +1812,14 @@ async function setCurrentSmartManualVideoUrl(){
     savePromptDraftForCurrent();
     const request = buildPromptRequest(node, null, true, smartLoopContext);
     const refs = videoRefsOnly(request.refs || []);
-    const firstLocal = refs.find(ref => ref?.url && !/^https?:\/\//i.test(ref.url));
+    const firstLocal = refs.find(ref => ref?.url && !isRemoteVideoReferenceUrl(ref.url));
     const firstAny = firstLocal || refs[0] || null;
     const manual = manualSmartVideoLink();
     const current = manual?.url || (firstAny ? tempShUploadedUrlFor(firstAny.url) : '');
     const value = await openAssetNameDialog({
-        title:'输入视频网址',
-        value:/^https?:\/\//i.test(current) ? current : '',
-        placeholder:'https://example.com/video.mp4'
+        title:'输入视频网址 / 火山素材 URI',
+        value:isRemoteVideoReferenceUrl(current) ? current : '',
+        placeholder:'https://example.com/video.mp4 或 asset://asset-xxx'
     });
     const url = String(value || '').trim();
     if(!url){
@@ -1825,8 +1830,8 @@ async function setCurrentSmartManualVideoUrl(){
         toast('已清除视频网址');
         return '';
     }
-    if(!/^https?:\/\//i.test(url)){
-        toast('请输入 http/https 视频网址');
+    if(!isRemoteVideoReferenceUrl(url)){
+        toast('请输入 http/https 视频网址或 asset:// 火山素材 URI');
         return '';
     }
     applyManualVideoUrlToSmartRef(firstAny, url);
@@ -2820,6 +2825,55 @@ function moveNodeElementsDuringDrag(){
     refreshConnectionLayer();
     renderMinimap();
 }
+function updateNodeElementDuringResize(node){
+    if(!node) return;
+    const el = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+    if(!el){
+        render();
+        return;
+    }
+    const imgs = node.images || [];
+    const layout = imageLayout(imgs, nodeScale(node), node);
+    el.style.width = `${layout.width}px`;
+    el.style.height = `${layout.height}px`;
+    const body = el.querySelector('.node-body');
+    if(body){
+        const loadingSingle = body.querySelector('.loading-cell.single');
+        if(loadingSingle){
+            loadingSingle.style.width = `${layout.width}px`;
+            loadingSingle.style.height = `${layout.height}px`;
+        }
+        const loadingGrid = body.querySelector('.loading-skeleton');
+        if(loadingGrid){
+            const count = Math.max(1, Number(node.pending) || 1);
+            const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
+            const rows = Math.ceil(count / cols);
+            loadingGrid.style.width = `${layout.width}px`;
+            loadingGrid.style.height = `${layout.height}px`;
+            loadingGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+            loadingGrid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+        }
+        const grid = body.querySelector('.thumb-grid');
+        if(grid){
+            grid.style.setProperty('--thumb-cols', layout.cols);
+            grid.style.setProperty('--thumb-size', `${layout.thumb}px`);
+        }
+        const wrap = body.querySelector('.image-wrap');
+        if(wrap){
+            wrap.style.setProperty('--node-img-w', `${layout.width}px`);
+            wrap.style.setProperty('--node-img-h', `${layout.height}px`);
+        }
+        const media = body.querySelector('.node-img');
+        if(media){
+            media.style.width = `${layout.width}px`;
+            media.style.height = `${layout.height}px`;
+        }
+    }
+    const active = selectedNode();
+    if(active?.id === node.id) positionComposerForNode(active);
+    refreshConnectionLayer();
+    renderMinimap();
+}
 function isVideoMediaItem(img){
     if(!img) return false;
     if(img.kind === 'video') return true;
@@ -2902,6 +2956,9 @@ function imageRefsOnly(refs){
 }
 function videoRefsOnly(refs){
     return (refs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'video');
+}
+function isRemoteVideoReferenceUrl(url){
+    return /^https?:\/\//i.test(String(url || '')) || /^asset:\/\//i.test(String(url || ''));
 }
 function audioRefsOnly(refs){
     return (refs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'audio');
@@ -3426,7 +3483,7 @@ function nodeRunElapsedMs(node){
     return 0;
 }
 function runTimePillHtml(node){
-    if(!node || node.runTimerHidden) return '';
+    if(!node || node.runTimerHidden || node.type === 'smart-prompt') return '';
     const running = Boolean(node.pending || node.running);
     if(!running && !node.runFinishedAt) return '';
     const cls = running ? '' : ' done';
@@ -3439,10 +3496,13 @@ function hideRunTimerForNode(node){
     return true;
 }
 function refreshRunTimerPills(){
-    const active = nodes.some(n => !n.runTimerHidden && (n.pending || n.running || n.runFinishedAt));
+    const active = nodes.some(n => n.type !== 'smart-prompt' && !n.runTimerHidden && (n.pending || n.running || n.runFinishedAt));
     document.querySelectorAll('[data-run-timer]').forEach(el => {
         const node = nodes.find(n => n.id === el.dataset.runTimer);
-        if(!node || node.runTimerHidden) return;
+        if(!node || node.runTimerHidden || node.type === 'smart-prompt') {
+            el.remove();
+            return;
+        }
         el.textContent = formatRunDuration(nodeRunElapsedMs(node));
         el.classList.toggle('done', Boolean(!node.pending && !node.running && node.runFinishedAt));
     });
@@ -4117,6 +4177,7 @@ function bindNodeEvents(){
             if(!node) return;
             const rect = nodeRect(node);
             resizeState = {id, startX:e.clientX, startY:e.clientY, startW:rect.width, startH:rect.height};
+            document.body.classList.add('smart-node-resize');
             capturePendingUndo();
         });
         const beginNodeDrag = e => {
@@ -7683,7 +7744,9 @@ async function runPromptLLMNode(nodeId){
     try {
         const provider = resolveChatProviderId(node.llmProvider || '');
         const model = resolveChatModel(node.llmModel || '', provider);
-        const images = imageRefsOnly(smartImageUsesWorkflowInput(node) ? workflowInputImagesFor(node) : inputImagesFor(node)).map(img => img.url).filter(Boolean);
+        const mediaRefs = promptNodeInputMediaForLLM(node);
+        const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
+        const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
         const result = await fetch('/api/canvas-llm', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
@@ -7691,6 +7754,7 @@ async function runPromptLLMNode(nodeId){
                 message,
                 messages:[],
                 images,
+                videos,
                 model,
                 provider,
                 ms_model: provider === 'modelscope' ? model : '',
@@ -7720,7 +7784,7 @@ function comfyFieldKind(field){
 async function runApiGeneration(prompt, refs){
     if(!settings.provider_id || !settings.model) throw new Error(tr('smart.errNoApiModel'));
     const count = Math.max(1, Math.min(8, Number(settings.count || 1)));
-    const payload = {prompt, provider_id:settings.provider_id, model:settings.model, size:sizeForRun(), quality:settings.quality || 'auto', n:count, reference_images:imageRefsOnly(refs)};
+    const payload = {prompt, provider_id:settings.provider_id, model:settings.model, size:sizeForRun(), quality:settings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs)};
     const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
         if(!r.ok) throw new Error(await r.text());
         return r.json();
@@ -8357,7 +8421,7 @@ window.onmousemove = e => {
         node.w = Math.max(minW, Math.round(resizeState.startW + dx));
         node.h = Math.max(minH, Math.round(resizeState.startH + dy));
         node.scale = 1;
-        render();
+        updateNodeElementDuringResize(node);
         return;
     }
     if(thumbDragState){
@@ -8434,6 +8498,7 @@ window.onmousemove = e => {
 };
 window.onmouseup = e => {
     document.body.classList.remove('smart-node-drag');
+    document.body.classList.remove('smart-node-resize');
     if(portDragState){
         const drag = portDragState;
         portDragState = null;
@@ -8457,10 +8522,12 @@ window.onmouseup = e => {
     if(resizeState){
         const node = nodes.find(n => n.id === resizeState.id);
         const rect = node ? nodeRect(node) : null;
-        if(rect && (Math.abs(rect.width - resizeState.startW) > 1 || Math.abs(rect.height - resizeState.startH) > 1)){
+        const changed = rect && (Math.abs(rect.width - resizeState.startW) > 1 || Math.abs(rect.height - resizeState.startH) > 1);
+        if(changed){
             commitPendingUndo();
         } else { discardPendingUndo(); }
         resizeState = null;
+        if(changed) render();
         scheduleSave();
     }
     if(thumbDragState){

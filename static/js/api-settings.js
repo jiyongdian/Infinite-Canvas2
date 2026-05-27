@@ -7,10 +7,6 @@ const nameInput = document.getElementById('nameInput');
 const idInput = document.getElementById('idInput');
 const baseInput = document.getElementById('baseInput');
 const protocolInput = document.getElementById('protocolInput');
-const volcengineHint = document.getElementById('volcengineHint');
-const advancedEndpoints = document.getElementById('advancedEndpoints');
-const imageGenerationEndpointInput = document.getElementById('imageGenerationEndpointInput');
-const imageEditEndpointInput = document.getElementById('imageEditEndpointInput');
 const keyInput = document.getElementById('keyInput');
 const keyHint = document.getElementById('keyHint');
 const rhFreeKeyInput = document.getElementById('rhFreeKeyInput');
@@ -311,28 +307,6 @@ function rhFreeKeyHintText(item){
 function rhWalletKeyHintText(item){
     return item?.has_wallet_key ? `当前账户余额 Key 已保存：${item.wallet_key_env || 'API/.env'} ${item.wallet_key_preview || ''}` : '还没有保存账户余额 Key。验证地址和拉取模型会优先使用它。';
 }
-function endpointValue(input){
-    return String(input?.value || '').trim();
-}
-function toggleAdvancedEndpoints(force){
-    if(!advancedEndpoints) return;
-    const open = typeof force === 'boolean' ? force : !advancedEndpoints.classList.contains('open');
-    advancedEndpoints.classList.toggle('open', open);
-    refreshIcons();
-}
-function normalizeEndpointSetting(value){
-    const endpoint = String(value || '').trim();
-    if(!endpoint) return '';
-    if(/^https?:\/\//i.test(endpoint)) return endpoint.replace(/\/+$/, '');
-    return endpoint;
-}
-function validateEndpointSetting(endpoint, label){
-    if(!endpoint) return true;
-    if(/\s/.test(endpoint)) throw new Error(`${label} 不能包含空格`);
-    if(/^https?:\/\//i.test(endpoint)) return true;
-    if(!endpoint.startsWith('/')) throw new Error(`${label} 请填写 /v1/... 格式，例如 /v1/images/edits`);
-    return true;
-}
 function syncEditor(){
     const item = provider();
     if(!item) return;
@@ -346,8 +320,8 @@ function syncEditor(){
     item.base_url = baseInput.value.trim();
     // MS 固定使用 OpenAI 协议，不从下拉读取
     item.protocol = (item.id === 'modelscope') ? 'openai' : item.id === 'runninghub' ? 'runninghub' : (protocolInput?.value || 'openai');
-    item.image_generation_endpoint = normalizeEndpointSetting(endpointValue(imageGenerationEndpointInput));
-    item.image_edit_endpoint = normalizeEndpointSetting(endpointValue(imageEditEndpointInput));
+    item.image_generation_endpoint = '';
+    item.image_edit_endpoint = '';
     item.rh_apps = normalizeRhEntries(item.rh_apps || [], 'app');
     item.rh_workflows = normalizeRhEntries(item.rh_workflows || [], 'workflow');
     const key = keyInput.value.trim();
@@ -373,16 +347,10 @@ function updateProtocolFromInput(){
         baseInput.value = VOLCENGINE_DEFAULT_BASE_URL;
         item.base_url = VOLCENGINE_DEFAULT_BASE_URL;
     }
-    updateProviderProtocolHint(item);
     clearVerifyResult();
 }
 function isVolcengineProvider(item){
     return String(item?.protocol || '').toLowerCase() === 'volcengine';
-}
-function updateProviderProtocolHint(item = provider()){
-    if(!volcengineHint) return;
-    const visible = !!item && item.id !== 'modelscope' && item.id !== 'runninghub' && isVolcengineProvider(item);
-    volcengineHint.hidden = !visible;
 }
 function handleRhPasteInput(value){
     const parsed = parseRunningHubRunRef(value);
@@ -1686,8 +1654,6 @@ function applyRecommendedApi(index){
         protocolInput.value = api.protocol;
         protocolInput.dispatchEvent(new Event('change'));
     }
-    if(imageGenerationEndpointInput) imageGenerationEndpointInput.value = '';
-    if(imageEditEndpointInput) imageEditEndpointInput.value = '';
     syncEditor();
     updateIdPreview();
     renderProviderList();
@@ -1709,28 +1675,46 @@ function sortedProviders(){
 function renderProviderList(){
     providerList.innerHTML = sortedProviders().map(item => {
         const active = item.id === selectedId ? 'active' : '';
+        const stateClass = item.enabled === false ? 'is-disabled' : (item.has_key || item.has_wallet_key ? 'has-key' : 'missing-key');
+        const protocolLabel = item.id === 'runninghub' ? 'RH' : String(item.protocol || 'openai').toUpperCase();
         if(item.id === 'modelscope'){
             return `
-                <button class="provider-card provider-card-banner ${active}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
-                    <img src="/static/images/modelscope.gif" alt="ModelScope" class="ms-icon-light">
-                    <img src="/static/images/modelscope-1.gif" alt="ModelScope" class="ms-icon-dark">
+                <button class="provider-card provider-card-banner ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
+                    <span class="provider-banner-inner">
+                        <span class="provider-logo-wrap">
+                            <img src="/static/images/modelscope.gif" alt="ModelScope" class="ms-icon-light">
+                            <img src="/static/images/modelscope-1.gif" alt="ModelScope" class="ms-icon-dark">
+                            <span class="provider-logo-fallback">ModelScope</span>
+                        </span>
+                        <span class="provider-protocol-pill">OpenAI</span>
+                    </span>
                 </button>
             `;
         }
         if(item.id === 'runninghub'){
             return `
-                <button class="provider-card provider-card-banner ${active}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
-                    <img src="/static/images/RunningHub-B.png" alt="RunningHub" class="runninghub-icon ms-icon-light">
-                    <img src="/static/images/RunningHub-W.png" alt="RunningHub" class="runninghub-icon ms-icon-dark">
+                <button class="provider-card provider-card-banner ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
+                    <span class="provider-banner-inner">
+                        <span class="provider-logo-wrap">
+                            <img src="/static/images/RunningHub-B.png" alt="RunningHub" class="runninghub-icon ms-icon-light">
+                            <img src="/static/images/RunningHub-W.png" alt="RunningHub" class="runninghub-icon ms-icon-dark">
+                            <span class="provider-logo-fallback">RunningHub</span>
+                        </span>
+                        <span class="provider-protocol-pill">RH</span>
+                    </span>
                 </button>
             `;
         }
         return `
-            <button class="provider-card ${active}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
+            <button class="provider-card ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
                 <span class="provider-mark"><i data-lucide="${item.has_key ? 'key-round' : 'key'}" class="w-4 h-4"></i></span>
-                <span class="min-w-0">
+                <span class="provider-info">
                     <div class="provider-name">${escapeHtml(item.name || item.id)}</div>
                     <div class="provider-meta">${escapeHtml(item.base_url || '未配置地址')}</div>
+                </span>
+                <span class="provider-side-meta">
+                    <span class="provider-status-dot"></span>
+                    <span class="provider-protocol-pill">${escapeHtml(protocolLabel)}</span>
                 </span>
             </button>
         `;
@@ -1747,9 +1731,6 @@ function renderEditor(){
     clearVerifyResult();
     baseInput.value = item.base_url || '';
     if(protocolInput) protocolInput.value = item.id === 'runninghub' ? 'openai' : (item.protocol || 'openai');
-    if(imageGenerationEndpointInput) imageGenerationEndpointInput.value = item.image_generation_endpoint || '';
-    if(imageEditEndpointInput) imageEditEndpointInput.value = item.image_edit_endpoint || '';
-    toggleAdvancedEndpoints(false);
     keyInput.value = '';
     keyInput.placeholder = item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.enterKey');
     keyHint.textContent = item.has_key ? `${tr('api.keySaved')}${item.key_env || 'API/.env'}` : tr('api.noKey');
@@ -1790,7 +1771,6 @@ function renderEditor(){
     renderModels('video');
     if(isModelScope) renderMsLoras();
     else if(msLoraList) msLoraList.innerHTML = '';
-    updateProviderProtocolHint(item);
     renderProviderList();
 }
 function showVerifyResult(html){ const el = document.getElementById('verifyResult'); if(el){ el.style.display = 'block'; el.innerHTML = html; } }
@@ -2226,35 +2206,27 @@ async function loadProviders(){
 }
 async function saveProviders(){
     syncEditor();
-    try {
-        providers.forEach(item => {
-            item.id = normalizeId(item.id);
-            item.protocol = item.id === 'runninghub'
-                ? 'runninghub'
-                : ['openai', 'apimart', 'gemini', 'volcengine'].includes(String(item.protocol || '').toLowerCase()) ? String(item.protocol).toLowerCase() : 'openai';
-            item.image_generation_endpoint = normalizeEndpointSetting(item.image_generation_endpoint);
-            item.image_edit_endpoint = normalizeEndpointSetting(item.image_edit_endpoint);
-            validateEndpointSetting(item.image_generation_endpoint, '文生图端口');
-            validateEndpointSetting(item.image_edit_endpoint, '图生图/编辑端口');
-            item.image_models = unique(item.image_models || []);
-            item.chat_models = unique(item.chat_models || []);
-            item.video_models = unique(item.video_models || []);
-            item.rh_apps = normalizeRhEntries(item.rh_apps || [], 'app');
-            item.rh_workflows = normalizeRhEntries(item.rh_workflows || [], 'workflow');
-            item.ms_loras = (Array.isArray(item.ms_loras) ? item.ms_loras : []).map(lora => ({
-                id:String(lora.id || '').trim(),
-                name:String(lora.name || lora.id || '').trim(),
-                target_model:String(lora.target_model || '').trim(),
-                strength:normalizeLoraStrength(lora.strength ?? 0.8),
-                enabled:lora.enabled !== false,
-                note:String(lora.note || '').trim()
-            })).filter(lora => lora.id && lora.target_model);
-        });
-    } catch(err) {
-        setStatus(err.message || '高级端口设置不合法');
-        toggleAdvancedEndpoints(true);
-        return false;
-    }
+    providers.forEach(item => {
+        item.id = normalizeId(item.id);
+        item.protocol = item.id === 'runninghub'
+            ? 'runninghub'
+            : ['openai', 'apimart', 'gemini', 'volcengine'].includes(String(item.protocol || '').toLowerCase()) ? String(item.protocol).toLowerCase() : 'openai';
+        item.image_generation_endpoint = '';
+        item.image_edit_endpoint = '';
+        item.image_models = unique(item.image_models || []);
+        item.chat_models = unique(item.chat_models || []);
+        item.video_models = unique(item.video_models || []);
+        item.rh_apps = normalizeRhEntries(item.rh_apps || [], 'app');
+        item.rh_workflows = normalizeRhEntries(item.rh_workflows || [], 'workflow');
+        item.ms_loras = (Array.isArray(item.ms_loras) ? item.ms_loras : []).map(lora => ({
+            id:String(lora.id || '').trim(),
+            name:String(lora.name || lora.id || '').trim(),
+            target_model:String(lora.target_model || '').trim(),
+            strength:normalizeLoraStrength(lora.strength ?? 0.8),
+            enabled:lora.enabled !== false,
+            note:String(lora.note || '').trim()
+        })).filter(lora => lora.id && lora.target_model);
+    });
     if(new Set(providers.map(item => item.id)).size !== providers.length){
         alert(tr('api.duplicateId'));
         return false;

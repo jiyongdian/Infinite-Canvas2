@@ -158,6 +158,7 @@
         "smart.loopNoChain": { zh: "没有可一键运行的上游链路", en: "No upstream chain to run" },
         "smart.loopRunDone": { zh: "一键运行完成", en: "Chain run complete" },
         "smart.loopRunRoundsDone": { zh: "循环运行完成：{n} 轮", en: "Loop complete: {n} rounds" },
+        "smart.loopParallelRoundsDone": { zh: "并发运行完成：{n} 轮", en: "Concurrent run complete: {n} rounds" },
         "smart.mentionInput": { zh: "输入图", en: "Inputs" },
         "smart.mentionAssets": { zh: "资产库", en: "Assets" },
         "smart.mentionEmpty": { zh: "没有可引用的图片", en: "No images available" },

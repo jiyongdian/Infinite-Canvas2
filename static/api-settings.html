@@ -15,12 +15,12 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.05.24"></script>
-    <script src="/static/vendor/js/lucide.js?v=2026.05.24"></script>
-    <script src="/static/js/theme.js?v=2026.05.24"></script>
-    <script src="/static/js/i18n.js?v=2026.05.24"></script>
-    <link rel="stylesheet" href="/static/css/theme.css?v=2026.05.24">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.05.24">
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.05.27.1"></script>
+    <script src="/static/vendor/js/lucide.js?v=2026.05.27.1"></script>
+    <script src="/static/js/theme.js?v=2026.05.27.1"></script>
+    <script src="/static/js/i18n.js?v=2026.05.27.1"></script>
+    <link rel="stylesheet" href="/static/css/theme.css?v=2026.05.27.1">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.05.27.1">
 </head>
 <body>
     <div class="page">
@@ -156,31 +156,6 @@
                                         <option value="gemini" data-i18n="api.protocolGemini">Gemini 协议</option>
                                         <option value="volcengine" data-i18n="api.protocolVolcengine">火山引擎协议</option>
                                     </select>
-                                </div>
-                                <button id="advancedToggleBtn" class="action-btn" type="button" onclick="toggleAdvancedEndpoints()">
-                                    <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i><span>高级设置</span>
-                                </button>
-                            </div>
-                            <div id="advancedEndpoints" class="advanced-endpoints">
-                                <div class="endpoint-help">
-                                    留空即使用默认端口。请填写 <code>/v1/...</code> 格式，例如 <code>/v1/images/edits</code>。
-                                </div>
-                                <div class="endpoint-grid">
-                                    <label class="field">
-                                        <span class="label">文生图端口</span>
-                                        <div class="field-frame"><input id="imageGenerationEndpointInput" type="text" placeholder="/v1/images/generations"></div>
-                                    </label>
-                                    <label class="field">
-                                        <span class="label">图生图/编辑端口</span>
-                                        <div class="field-frame"><input id="imageEditEndpointInput" type="text" placeholder="/v1/images/edits"></div>
-                                    </label>
-                                </div>
-                            </div>
-                            <div id="volcengineHint" class="provider-protocol-hint" hidden>
-                                <div class="provider-protocol-hint-title">火山方舟聊天规则</div>
-                                <div class="provider-protocol-hint-body">
-                                    聊天模型优先填写你在方舟控制台创建的推理接入点 ID，格式通常为 <code>ep-...</code>。
-                                    <code>/api/v3/models</code> 拉到的公开模型名不一定能直接用于 <code>/chat/completions</code>。
                                 </div>
                             </div>
                             <div id="verifyResult" style="display:none;padding:2px 0;grid-column:1/-1"></div>
@@ -377,6 +352,6 @@
         </div>
     </div>
 
-    <script src="/static/js/api-settings.js?v=2026.05.24"></script>
+    <script src="/static/js/api-settings.js?v=2026.05.27.1"></script>
 </body>
 </html>

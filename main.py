@@ -16,6 +16,7 @@ import logging
 import requests
 import zipfile
 import mimetypes
+import tempfile
 from typing import List, Dict, Any, Optional
 from threading import Lock
 import httpx
@@ -1603,6 +1604,7 @@ class CanvasLLMRequest(BaseModel):
     provider: str = "comfly"
     ms_model: str = ""
     images: List[str] = []   # 可以是 /output/*.png、/assets/*.png 本地路径 或 http(s) URL 或 data URL
+    videos: List[str] = []   # 可以是 /output/*.mp4、/assets/*.mp4 本地路径 或 http(s) URL 或 data URL
 
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
@@ -2506,6 +2508,19 @@ def is_image_reference_value(value):
         return False
     return True
 
+def is_video_reference_value(value):
+    if not isinstance(value, str) or not value:
+        return False
+    if value.startswith("data:video/"):
+        return True
+    if value.startswith("data:"):
+        return False
+    if value.startswith("/output/") or value.startswith("/assets/"):
+        path = output_file_from_url(value)
+        return bool(path and content_type_for_path(path).startswith("video/"))
+    clean = value.split("?", 1)[0].lower()
+    return bool(re.search(r"\.(mp4|webm|mov|m4v|avi|mkv)$", clean))
+
 def convert_output_to_jpg(url, quality=88):
     path = output_file_from_url(url)
     if not path:
@@ -2559,6 +2574,108 @@ def reference_to_data_url(ref, max_size=None):
     with open(path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode("ascii")
     return f"data:{content_type_for_path(path)};base64,{encoded}"
+
+def media_reference_to_url(value, max_image_size=None):
+    if not isinstance(value, str) or not value:
+        return ""
+    if value.startswith("/output/") or value.startswith("/assets/"):
+        return reference_to_data_url({"url": value}, max_size=max_image_size)
+    return value
+
+def is_private_asset_url(value: str) -> bool:
+    return isinstance(value, str) and value.strip().startswith("asset://")
+
+def volcengine_media_reference_url(value, max_image_size=1536):
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    if not value:
+        return ""
+    if is_private_asset_url(value):
+        return value
+    if value.startswith("/output/") or value.startswith("/assets/"):
+        return reference_to_data_url({"url": value}, max_size=max_image_size)
+    return value
+
+def volcengine_content_role(role: str, kind: str = "image") -> str:
+    value = str(role or "").strip().lower()
+    allowed = {
+        "first_frame", "last_frame", "reference_image",
+        "reference_video", "video", "image"
+    }
+    if value in allowed:
+        return "reference_video" if value == "video" and kind == "video" else value
+    if kind == "video":
+        return "reference_video"
+    return "reference_image"
+
+def volcengine_video_duration(duration) -> int:
+    try:
+        value = int(duration)
+    except Exception:
+        value = 5
+    return max(1, min(60, value))
+
+def volcengine_video_resolution(value: str) -> str:
+    text = str(value or "").strip().lower()
+    aliases = {"": "", "auto": "", "480": "480p", "720": "720p", "1080": "1080p"}
+    text = aliases.get(text, text)
+    return text if text in {"480p", "720p", "1080p"} else ""
+
+async def video_reference_to_frame_data_urls(value, max_frames=6, max_size=768):
+    if not isinstance(value, str) or not value:
+        return []
+    path = output_file_from_url(value)
+    cleanup_path = ""
+    if not path and value.startswith(("http://", "https://")):
+        suffix = os.path.splitext(urllib.parse.urlparse(value).path)[1] or ".mp4"
+        fd, cleanup_path = tempfile.mkstemp(prefix="canvas_llm_video_", suffix=suffix)
+        os.close(fd)
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=10.0)) as client:
+                response = await client.get(value)
+                response.raise_for_status()
+                with open(cleanup_path, "wb") as f:
+                    f.write(response.content)
+            path = cleanup_path
+        except Exception as e:
+            print(f"[canvas-llm] video download failed: {e}")
+            if cleanup_path and os.path.exists(cleanup_path):
+                try: os.remove(cleanup_path)
+                except OSError: pass
+            return []
+    if not path or not os.path.exists(path):
+        return []
+    frame_dir = tempfile.mkdtemp(prefix="canvas_llm_frames_")
+    try:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return []
+        pattern = os.path.join(frame_dir, "frame_%03d.jpg")
+        cmd = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-i", path,
+            "-vf", f"fps=1,scale='min({max_size},iw)':-2",
+            "-frames:v", str(max(1, max_frames)),
+            pattern
+        ]
+        proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=90)
+        if proc.returncode != 0:
+            print(f"[canvas-llm] ffmpeg frame extract failed: {proc.stderr[:300]}")
+            return []
+        frames = []
+        for name in sorted(os.listdir(frame_dir)):
+            if not name.lower().endswith((".jpg", ".jpeg", ".png")):
+                continue
+            frame_path = os.path.join(frame_dir, name)
+            with open(frame_path, "rb") as f:
+                frames.append(f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode('ascii')}")
+        return frames
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
+        if cleanup_path and os.path.exists(cleanup_path):
+            try: os.remove(cleanup_path)
+            except OSError: pass
 
 def compress_data_url_image(value, max_size=1536, jpeg_quality=88):
     if not isinstance(value, str) or not value.startswith("data:image/") or ";base64," not in value:
@@ -4908,12 +5025,8 @@ async def canvas_video(payload: CanvasVideoRequest):
                         body["generate_audio"] = True
             else:
                 # 非 APIMart：data URL 方式（OpenAI / ComflyAI 接口）
-                image_payload = []
-                for ref in payload.images[:4]:
-                    if ref.url:
-                        image_payload.append(reference_to_data_url(ref.dict(), max_size=1536))
                 if is_volcengine:
-                    text = volcengine_video_prompt_text(payload.prompt, payload.aspect_ratio, payload.duration)
+                    text = str(payload.prompt or "").strip()
                     body = {
                         "model": selected_model(payload.model, "doubao-seedance-2-0-fast-260128"),
                         "content": [
@@ -4922,15 +5035,47 @@ async def canvas_video(payload: CanvasVideoRequest):
                                 "text": text,
                             }
                         ],
+                        "duration": volcengine_video_duration(payload.duration),
                     }
-                    if image_payload:
-                        body["content"].append({
+                    if payload.aspect_ratio:
+                        body["ratio"] = payload.aspect_ratio
+                    resolution = volcengine_video_resolution(payload.resolution)
+                    if resolution:
+                        body["resolution"] = resolution
+                    if payload.watermark:
+                        body["watermark"] = True
+                    if payload.generate_audio:
+                        body["generate_audio"] = True
+                    if payload.camerafixed:
+                        body["camerafixed"] = True
+                    for ref in payload.images[:9]:
+                        url = volcengine_media_reference_url(ref.url, max_image_size=1536)
+                        if not url:
+                            continue
+                        item = {
                             "type": "image_url",
-                            "image_url": {"url": image_payload[0]},
+                            "image_url": {"url": url},
+                        }
+                        role = volcengine_content_role(ref.role, "image")
+                        if role:
+                            item["role"] = role
+                        body["content"].append(item)
+                    for url in (payload.videos or [])[:3]:
+                        media_url = volcengine_media_reference_url(url, max_image_size=None)
+                        if not media_url:
+                            continue
+                        body["content"].append({
+                            "type": "video_url",
+                            "video_url": {"url": media_url},
+                            "role": "reference_video",
                         })
                     if payload.seed is not None:
                         body["seed"] = payload.seed
                 else:
+                    image_payload = []
+                    for ref in payload.images[:4]:
+                        if ref.url:
+                            image_payload.append(reference_to_data_url(ref.dict(), max_size=1536))
                     body = {
                         "prompt": payload.prompt,
                         "model": selected_model(payload.model, "veo3-fast"),
@@ -5043,24 +5188,37 @@ async def canvas_llm(payload: CanvasLLMRequest):
         content = item.get("content")
         if role in {"user", "assistant"} and content:
             upstream_messages.append({"role": role, "content": content})
-    # 构造用户消息：有图片时用 OpenAI vision 多模态格式
+    # 构造用户消息：有图片/视频时用 OpenAI/Gemini 多模态格式
     image_inputs = [img for img in (payload.images or []) if is_image_reference_value(img)]
-    if image_inputs:
+    video_inputs = [video for video in (payload.videos or []) if is_video_reference_value(video)]
+    if image_inputs or video_inputs:
         content_parts = [{"type": "text", "text": payload.message}]
         ok_imgs = 0
         for img in image_inputs[:8]:
             if not img or not isinstance(img, str):
                 continue
-            # 本地 /output/* 或 /assets/* 路径转为 data URL；http(s) 或 data URL 直接用
-            if img.startswith("/output/") or img.startswith("/assets/"):
-                ref_url = reference_to_data_url({"url": img}, max_size=1024)
-            else:
-                ref_url = img
+            ref_url = media_reference_to_url(img, max_image_size=1024)
             if not ref_url:
                 continue
             content_parts.append({"type": "image_url", "image_url": {"url": ref_url}})
             ok_imgs += 1
-        print(f"[canvas-llm] model={model} provider={payload.provider} text_len={len(payload.message)} images={ok_imgs}/{len(payload.images)}")
+        ok_videos = 0
+        for video in video_inputs[:3]:
+            if not video or not isinstance(video, str):
+                continue
+            frame_urls = await video_reference_to_frame_data_urls(video, max_frames=6, max_size=768)
+            if frame_urls:
+                ok_videos += 1
+                content_parts.append({"type": "text", "text": f"以下是视频 {ok_videos} 按时间顺序抽取的关键帧，请结合这些画面理解视频内容。"})
+                for frame_url in frame_urls:
+                    content_parts.append({"type": "image_url", "image_url": {"url": frame_url}})
+            else:
+                ref_url = media_reference_to_url(video)
+                if not ref_url:
+                    continue
+                content_parts.append({"type": "video_url", "video_url": {"url": ref_url}})
+                ok_videos += 1
+        print(f"[canvas-llm] model={model} provider={payload.provider} text_len={len(payload.message)} images={ok_imgs}/{len(payload.images)} videos={ok_videos}/{len(payload.videos)}")
         upstream_messages.append({"role": "user", "content": content_parts})
     else:
         upstream_messages.append({"role": "user", "content": payload.message})
