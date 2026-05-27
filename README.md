@@ -29,7 +29,7 @@ May 25th Update:
 
 3. Supports uploading video/audio, and supports various output results from Comfyui (video/audio/text)
 
-----LICENSE----
+--------
 
 禁止商业用途
 
